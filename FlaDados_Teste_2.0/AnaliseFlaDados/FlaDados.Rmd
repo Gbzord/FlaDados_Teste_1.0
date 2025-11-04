@@ -1,0 +1,73 @@
+---
+title: "_______________________________*FlaDados*______________________"
+
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    theme: cerulean
+runtime: shiny
+
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(gapminder)
+library(ggplot2)
+library(plotly)
+names(gapminder)<-c("Flamengo","Gls","xG","eficiencia_finalizacao","criatividade_ofensiva")
+```
+
+Análise 1
+===================
+Inputs {.sidebar}
+------------------------------------------
+
+```{r}
+selectInput( "Time", label ="Time:",
+		choices = unique(gapminder$Team), selected = "Time")
+sliderInput("x_G" , label ="eficiencia_finalizacao",
+		min = 50 , max = 100 , value  = 100, step=5)
+
+```
+
+row {data-height=350}
+-----------------------------------------------------------------------
+
+### Chart B
+
+```{r}
+
+```
+
+### Chart C
+
+```{r}
+
+```
+
+
+
+
+Página 2
+===
+
+Column {data-width= 200}
+---
+###Gráfico 1
+```{r}
+
+```
+
+
+Column {.tabset}
+---
+###Dados 1
+```{r}
+
+```
+
+###Dados 2
+```{r}
+
+```
