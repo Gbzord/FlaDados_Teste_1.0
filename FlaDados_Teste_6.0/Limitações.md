@@ -1,0 +1,1 @@
+dados manuais, ausência de tracking completo.

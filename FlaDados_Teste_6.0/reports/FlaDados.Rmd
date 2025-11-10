@@ -1,0 +1,406 @@
+---
+title: "FlaDados - Analytics Tático CR Flamengo"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    social: menu
+    source_code: embed
+    theme: cosmo
+runtime: shiny
+params:
+  jogador: NULL
+  periodo: "season"
+---
+<style>                     
+.navbar {
+  background-color:black;
+  border-color:red;
+  color: #FFFFFF;
+  
+}
+.navbar-brand {
+color:white!important;
+}
+
+css <- "
+.btn-primary:hover {
+    color: #fff;
+    background-color: #FF0000;
+    background-image: none;
+    border-color: #000000;
+}
+
+</style> 
+
+```{r setup, include=FALSE}
+# CARREGAR TODAS AS BIBLIOTECAS
+library(flexdashboard)
+library(shiny)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(ggrepel)
+library(ggsoccer)
+library(DT)
+library(rmarkdown)
+library(janitor)
+library(tibble)
+library(stringr)
+
+# Carregar dados prontos
+source("scripts/load_data.R")
+analise_of <- readRDS("data_clean/analise_ofensivo.rds")
+analise_def <- readRDS("data_clean/analise_defensivo.rds")
+
+# =========================================================================
+# DADOS TÁTICOS (Normalização)
+# =========================================================================
+
+# 3.2. Simulação de Eventos (Para o Mapa Tático)
+analise_tatico <- analise_of %>%
+  # Normalização das métricas para mapear no campo
+  mutate(
+    # Mapeamento: Criatividade (y) e Intensidade (x) para coordenadas táticas
+    x_coordenada_tatico = 50 + 20 * (criatividade_ofensiva - mean(criatividade_ofensiva)) / sd(criatividade_ofensiva),
+    y_coordenada_tatico = 50 + 20 * (intensidade_ataque - mean(intensidade_ataque)) / sd(intensidade_ataque),
+    # Tamanho do Ponto: Gols
+    tamanho_ponto = Gols_Gls / mean(Gols_Gls) * 5
+  )
+
+dados_campo <- analise_tatico 
+
+# CONFIGURAÇÃO DE CORES DO FLAMENGO
+cores_flamengo <- c("#C12C25", "#000000", "#FFFFFF")
+
+# =========================================================================
+# LÓGICA REATIVA (SHINY) - FILTRO DE DADOS
+# =========================================================================
+
+filtered_data <- eventReactive(input$atualizar, {
+  # Corrigido: Usando 'jogos' (minúsculo) em vez de 'Jogos'
+  ofensiva_filtrada <- analise_brasileirao_ofensivo %>%
+    filter(jogos >= input$jogos_minimos)
+  
+  # Corrigido: Usando 'jogos' (minúsculo) em vez de 'Jogos'
+  defensiva_filtrada <- analise_brasileirao_defensivo %>%
+    filter(jogos >= input$jogos_minimos)
+  
+  # Corrigido: Usando 'jogos' (minúsculo) em vez de 'Jogos'
+  tatico_filtrado <- dados_campo_uefa %>%
+    filter(jogos >= input$jogos_minimos)
+    
+  list(
+    ofensiva = ofensiva_filtrada,
+    defensiva = defensiva_filtrada,
+    tatico = tatico_filtrado
+  )
+}, ignoreNULL = FALSE) 
+
+```
+
+Visao Geral{.sidebar}
+=====================================
+Column {data-width="200"}
+
+```{r}
+selectInput("time_selecionado", "Time para Análise:",
+            choices = unique(analise_brasileirao_ofensivo$time),
+            selected = "Flamengo")
+
+sliderInput("jogos_minimos", "Mínimo de Jogos:",
+            min = 10, max = 40, value = 25)
+
+actionButton("atualizar", "Atualizar Dashboard", 
+             icon = icon("sync"))
+
+```
+Column {data-width="600"}
+Row {data-height=400}
+
+### Eficiência de Finalização
+
+```{r}
+renderPlotly({
+  # Acessa os dados filtrados
+  data_filtered <- filtered_data()$ofensiva
+
+  p1 <- ggplot(data_filtered, 
+               aes(x = x_G, y = Gols_Gls, label = time)) +
+    geom_point(aes(size = intensidade_ataque, 
+                   color = ifelse(time == input$time_selecionado, 
+                                  "Flamengo", "Outros")), 
+               alpha = 0.7) +
+    ggrepel::geom_text_repel(aes(label = time), size = 3, max.overlaps = 15) + 
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+    scale_color_manual(values = c("Flamengo"= cores_flamengo[1],"Outros" = "gray")) +
+    labs(title = "Eficiência de Finalização - Gols vs xG",
+         x = "xG Esperado (por 90 minutos)", y = "Gols Marcados (por 90 minutos)",
+         size = "Intensidade de Ataque") +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  ggplotly(p1, tooltip = c("x", "y", "label", "size")) %>% config(displayModeBar = FALSE)
+})
+```
+Column {data-width="600"}
+Row {data-height=400}
+### Indicadores Chave
+
+```{r}
+
+renderUI({
+  data_of <- filtered_data()$ofensiva %>% filter(time == input$time_selecionado)
+  data_def <- filtered_data()$defensiva %>% filter(time == input$time_selecionado)
+  
+  if (nrow(data_of) == 0 | nrow(data_def) == 0) return(NULL)
+  
+  Gols <- data_of$Gols_Gls[1]
+  PPDA_val <- data_def$PPDA[1]
+  Eficiencia <- data_of$eficiencia_finalizacao[1]
+
+  tagList(
+    valueBox(value = Gols, caption = "Gols Marcados", icon = icon("futbol"), color = "danger"),
+    valueBox(value = PPDA_val, caption = "PPDA (Menor = Melhor)", icon = icon("shield-alt"), 
+             color = ifelse(PPDA_val < 9.5, "success", "warning")),
+    valueBox(value = round(Eficiencia, 2), caption = "Eficiência (Gols/xG)", icon = icon("chart-line"), 
+             color = ifelse(Eficiencia > 1, "success", "warning"))
+  )
+})
+
+
+```
+
+### Análise Ofensiva
+Row {data-height=600}
+
+------------------------------------------------------------------------
+
+### Criatividade vs Intensidade
+
+```{r}
+# GRÁFICO DE DISPERSÃO (Prioridade Alta)
+renderPlotly({
+  data_filtered <- filtered_data()$ofensiva
+  
+  p2 <- ggplot(data_filtered, 
+               aes(x = criatividade_ofensiva, y = intensidade_ataque, label = time)) +
+    geom_point(aes(size = Gols_Gls, 
+                   color = ifelse(time == input$time_selecionado, 
+                                  "Flamengo", "Outros")), 
+               alpha = 0.7) +
+    geom_text_repel(aes(label = time), size = 3, max.overlaps = 15) +
+    scale_color_manual(values = c("Flamengo" = cores_flamengo[1], 
+                                  "Outros" = "gray")) +
+    labs(title = "Criatividade vs Intensidade Ofensiva",
+         x = "Criatividade Ofensiva (Ast + Prog Passes / Jogo)", y = "Intensidade de Ataque (Ações / Jogo)") +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  ggplotly(p2, tooltip = c("x", "y", "label", "size")) %>% config(displayModeBar = FALSE)
+})
+
+
+```
+
+Column {data-width="600"}
+Row {data-height=400}
+### Passes Progressivos por Time
+
+```{r}
+renderPlotly({
+  dados_plot <- filtered_data()$ofensiva %>%
+    arrange(desc(passes_progressivos_PrgP))
+  
+  plot_ly(dados_plot, 
+          x = ~reorder(time, passes_progressivos_PrgP), 
+          y = ~passes_progressivos_PrgP,
+          type = 'bar',
+          marker = list(color = ifelse(dados_plot$time == input$time_selecionado, 
+                                       cores_flamengo[1], 'lightgray')),
+          hovertemplate = "Time: %{x}<br>Passes Prog: %{y}<extra></extra>") %>%
+    layout(title = "Passes Progressivos por Time",
+           xaxis = list(title = "", categoryorder = "total descending"),
+           yaxis = list(title = "Total de Passes Progressivos")) %>%
+    config(displayModeBar = FALSE)
+})
+
+
+```
+
+Column {data-width=40}
+### Detalhe do Time Selecionado
+```{r}
+renderDataTable({
+  data_filtered <- filtered_data()$ofensiva
+  
+  data_filtered %>%
+    filter(time == input$time_selecionado) %>%
+    select(Time = time, 
+           Gols = Gols_Gls, 
+           xG = x_G, 
+           `Criatividade` = criatividade_ofensiva, 
+           `Intensidade` = intensidade_ataque) %>%
+    datatable(options = list(
+      dom = 't', # Apenas a tabela
+      paging = FALSE, 
+      ordering = FALSE
+    )) %>%
+    formatRound(columns = c('xG', 'Criatividade', 'Intensidade'), digits = 2)
+})
+
+```
+
+
+###Análiise Defensiva
+Row {data-height=400}
+
+### Pressing e Eficiência Defensiva
+
+```{r}
+renderPlotly({
+  data_filtered <- filtered_data()$defensiva
+
+  p3 <- ggplot(data_filtered, 
+               aes(x = Press, y = PPDA, label = time)) +
+    geom_point(aes(size = eficiencia_defensiva,
+                   color = ifelse(time == input$time_selecionado, "Flamengo", "Outros")), 
+               alpha = 0.7) +
+    geom_text_repel(aes(label = time), size = 3, max.overlaps = 15) +
+    scale_color_manual(values = c("Flamengo" = cores_flamengo[1], "Outros" = "gray")) +
+    labs(title = "Análise de Pressing",
+         subtitle = "PPDA mais baixo = defesa mais eficiente",
+         x = "Intensidade de Pressing (Ações)", y = "PPDA") +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  ggplotly(p3, tooltip = c("x", "y", "label", "size")) %>% config(displayModeBar = FALSE)
+})
+```
+Row {data-height=400}
+
+Column {data-width=50}
+### Tabela de Classificação PPDA
+
+```{r}
+renderDataTable({
+  data_filtered <- filtered_data()$defensiva
+  
+  data_table <- data_filtered %>%
+    arrange(PPDA) %>%
+    mutate(Posicao = row_number()) %>%
+    # NOTA: A coluna 'intensidade_pressing' deve ser criada no seu bloco setup.
+    select(Posicao, Time = time, PPDA, `Intensidade Pressing` = Press) 
+  
+  datatable(data_table, options = list(
+    pageLength = 7,
+    dom = 't', 
+    initComplete = JS(
+      "function(settings, json) {",
+      "$(this.api().table().header()).css({'background-color': '#C12C25', 'color': '#fff'});",
+      "}")
+  )) %>%
+    formatStyle('Time', 
+                backgroundColor = styleEqual(input$time_selecionado, cores_flamengo[1]),
+                color = styleEqual(input$time_selecionado, '#FFFFFF'))
+})
+
+
+
+```
+
+Column {data-width=50}
+### Interpretação Defensiva
+
+```{r}
+renderUI({
+  HTML("
+  <div style='background: #f8f9fa; padding: 15px; border-radius: 5px; height: 100%;'>
+    <h4>🔍 Análise Defensiva</h4>
+    <p><strong>PPDA (Passes por Ação Defensiva):</strong> Quanto menor, mais intenso é o pressing no campo adversário. Um valor abaixo de 10 é considerado de elite.</p>
+    <p><strong>Eixo Y (PPDA):</strong> O objetivo é estar na parte inferior (baixo PPDA).</p>
+    <p><strong>Tamanho do Ponto:</strong> Representa a Eficiência Defensiva calculada (ex: xG sofrido por jogo), indicando a solidez da defesa.</p>
+    <p style='color:#C12C25; font-weight: bold;'>O Flamengo deve buscar um PPDA baixo e alta eficiência (ponto grande).</p>
+  </div>
+  ")
+})
+
+
+```
+
+### CAMPO TÁTICO INTERATIVO
+Column {data-width=700}
+===================================
+
+### Mapa Tático Interativo
+
+```{r}
+renderPlot({
+  data_filtered <- filtered_data()$tatico
+  
+  # Filtra e define o destaque (Flamengo)
+  dados_interativo <- data_filtered %>%
+    mutate(destaque = ifelse(time == input$time_selecionado, "Destaque", "Normal")) %>%
+    arrange(destaque) # Garante que o Flamengo fique por cima
+  
+  ggplot(dados_interativo, aes(x = x_coordenada_tatico, y = y_coordenada_tatico)) +
+    annotate_pitch(dimensions = pitch_international, fill = "#377d22", colour = "white") +
+    geom_point(aes(size = tamanho_ponto, color = destaque), alpha = 0.8) +
+    scale_y_reverse(limits = c(100, 0)) +
+    geom_text_repel(aes(label = time, color = destaque), size = 4, max.overlaps = 10) +
+    scale_color_manual(values = c("Destaque" = cores_flamengo[1], 
+                                  "Normal" = "yellow")) +
+    theme_pitch() +
+    labs(title = "Posicionamento Tático no Espaço de Métrica",
+         subtitle = "Eixos baseados na média da liga",
+         x = "Criatividade (Mais à direita = Mais Criativo)",
+         y = "Intensidade (Mais acima = Mais Intenso)") +
+    theme(legend.position = "none") +
+    coord_fixed()
+})
+
+```
+
+
+
+### Análise Personalizada (Relatório Flamengo)
+
+
+Column {data-width=300}
+===================================
+```{r}
+renderUI({
+  dados_flamengo_of <- filtered_data()$ofensiva %>% filter(time == input$time_selecionado)
+  dados_flamengo_def <- filtered_data()$defensiva %>% filter(time == input$time_selecionado)
+  
+  if (nrow(dados_flamengo_of) == 0 | nrow(dados_flamengo_def) == 0) {
+    return(HTML("<p>Dados do time selecionado não disponíveis (Verifique o filtro de Jogos Mínimos).</p>"))
+  }
+
+  HTML(paste0(
+    "<div style='background: linear-gradient(135deg, ", cores_flamengo[1], ", ", cores_flamengo[2], "); 
+          color: white; padding: 20px; border-radius: 10px; height: 100%;'>
+      <h2>📈 Relatório ", input$time_selecionado ,"</h2>
+      <div style='display: grid; grid-template-columns: 1fr; gap: 15px; margin-top: 20px;'>
+        <div style='background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px;'>
+          <h4>⚽ OFENSIVA</h4>
+          <p><strong>Gols:</strong> ", dados_flamengo_of$Gols_Gls[1], " (xG: ", round(dados_flamengo_of$x_G[1], 1), ")</p>
+          <p><strong>Eficiência:</strong> ", round(dados_flamengo_of$eficiencia_finalizacao[1], 2), 
+          ifelse(dados_flamengo_of$eficiencia_finalizacao[1] > 1, " (Supera o xG!)", " (Abaixo do xG)") , "</p>
+          <p><strong>Criatividade:</strong> ", round(dados_flamengo_of$criatividade_ofensiva[1], 1), "</p>
+        </div>
+        <div style='background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px;'>
+          <h4>🛡️ DEFESA</h4>
+          <p><strong>PPDA:</strong> ", dados_flamengo_def$PPDA[1], 
+          ifelse(dados_flamengo_def$PPDA[1] < 9.5, " (Pressing de Elite)", "") , "</p>
+          <p><strong>Intensidade:</strong> ", dados_flamengo_def$Press[1], "</p>
+          <p><strong>Eficiência Defensiva:</strong> ", round(dados_flamengo_def$eficiencia_defensiva[1], 1), "</p>
+        </div>
+      </div>
+    </div>"
+  ))
+})
+
+
+```
+
